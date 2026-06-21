@@ -1,6 +1,7 @@
 package com.reefer.diagnosis.util;
 
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream;
 import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,11 +16,63 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 @Component
 public class ZipExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(ZipExtractor.class);
+
+    public int streamCsvFromZip(Path zipFile, BiConsumer<String, InputStream> entryConsumer) throws IOException {
+        int count = 0;
+        try (ZipFile zip = new ZipFile(zipFile.toFile())) {
+            Enumeration<ZipArchiveEntry> entries = zip.getEntries();
+            while (entries.hasMoreElements()) {
+                ZipArchiveEntry entry = entries.nextElement();
+                String entryName = entry.getName();
+
+                if (!isEntrySafe(entryName) || entry.isDirectory() || !isCsvFileName(entryName)) {
+                    continue;
+                }
+
+                log.debug("流式读取ZIP条目: {}", entryName);
+                try (InputStream is = zip.getInputStream(entry);
+                     BufferedInputStream bis = new BufferedInputStream(is)) {
+                    entryConsumer.accept(entryName, bis);
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    public int streamCsvFromZip(InputStream zipInputStream, BiConsumer<String, InputStream> entryConsumer) throws IOException {
+        if (!(zipInputStream instanceof BufferedInputStream)) {
+            zipInputStream = new BufferedInputStream(zipInputStream);
+        }
+        int count = 0;
+        try (ZipArchiveInputStream zis = new ZipArchiveInputStream(zipInputStream, "UTF-8", true, true)) {
+            ZipArchiveEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                String entryName = entry.getName();
+                if (!isEntrySafe(entryName) || entry.isDirectory() || !isCsvFileName(entryName)) {
+                    continue;
+                }
+                log.debug("流式读取ZIP条目: {}", entryName);
+                entryConsumer.accept(entryName, zis);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private boolean isEntrySafe(String entryName) {
+        return entryName != null
+                && !entryName.isEmpty()
+                && !entryName.startsWith("/")
+                && !entryName.contains("..")
+                && !entryName.startsWith("..");
+    }
 
     public List<Path> extractToTemp(Path zipFile, Path targetDir) throws IOException {
         List<Path> extractedFiles = new ArrayList<>();
@@ -71,8 +124,11 @@ public class ZipExtractor {
     }
 
     public boolean isCsvFile(Path path) {
-        String name = path.getFileName().toString().toLowerCase();
-        return name.endsWith(".csv");
+        return isCsvFileName(path.getFileName().toString());
+    }
+
+    private boolean isCsvFileName(String name) {
+        return name != null && name.toLowerCase().endsWith(".csv");
     }
 
     public Path createTempDir(String prefix) throws IOException {

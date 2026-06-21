@@ -8,6 +8,7 @@ public class ImportResultDTO {
     private int successCount;
     private int failCount;
     private int totalRecords;
+    private boolean streamingMode;
     private List<FileImportResult> fileResults;
 
     public ImportResultDTO() {}
@@ -17,6 +18,7 @@ public class ImportResultDTO {
         this.successCount = b.successCount;
         this.failCount = b.failCount;
         this.totalRecords = b.totalRecords;
+        this.streamingMode = b.streamingMode;
         this.fileResults = b.fileResults;
     }
 
@@ -30,6 +32,8 @@ public class ImportResultDTO {
     public void setFailCount(int failCount) { this.failCount = failCount; }
     public int getTotalRecords() { return totalRecords; }
     public void setTotalRecords(int totalRecords) { this.totalRecords = totalRecords; }
+    public boolean isStreamingMode() { return streamingMode; }
+    public void setStreamingMode(boolean streamingMode) { this.streamingMode = streamingMode; }
     public List<FileImportResult> getFileResults() { return fileResults; }
     public void setFileResults(List<FileImportResult> fileResults) { this.fileResults = fileResults; }
 
@@ -38,12 +42,14 @@ public class ImportResultDTO {
         private int successCount;
         private int failCount;
         private int totalRecords;
+        private boolean streamingMode;
         private List<FileImportResult> fileResults;
 
         public Builder totalFiles(int v) { this.totalFiles = v; return this; }
         public Builder successCount(int v) { this.successCount = v; return this; }
         public Builder failCount(int v) { this.failCount = v; return this; }
         public Builder totalRecords(int v) { this.totalRecords = v; return this; }
+        public Builder streamingMode(boolean v) { this.streamingMode = v; return this; }
         public Builder fileResults(List<FileImportResult> v) { this.fileResults = v; return this; }
         public ImportResultDTO build() { return new ImportResultDTO(this); }
     }

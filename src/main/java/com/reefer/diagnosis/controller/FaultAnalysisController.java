@@ -4,11 +4,14 @@ import com.reefer.diagnosis.dto.BatchDiagnosisResultDTO;
 import com.reefer.diagnosis.dto.DirectDiagnosisRequest;
 import com.reefer.diagnosis.model.DiagnosisResult;
 import com.reefer.diagnosis.service.FaultAnalysisService;
+import com.reefer.diagnosis.service.LogImportService;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -19,9 +22,30 @@ public class FaultAnalysisController {
     private static final Logger log = LoggerFactory.getLogger(FaultAnalysisController.class);
 
     private final FaultAnalysisService faultAnalysisService;
+    private final LogImportService logImportService;
 
-    public FaultAnalysisController(FaultAnalysisService faultAnalysisService) {
+    public FaultAnalysisController(FaultAnalysisService faultAnalysisService,
+                                   LogImportService logImportService) {
         this.faultAnalysisService = faultAnalysisService;
+        this.logImportService = logImportService;
+    }
+
+    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<DiagnosisResult> diagnoseFromUpload(
+            @RequestPart("file") MultipartFile file) {
+        log.info("上传即诊断请求 - 文件: {}, 大小: {}bytes",
+                file.getOriginalFilename(), file.getSize());
+        DiagnosisResult result = logImportService.diagnoseFromUpload(file);
+        return ResponseEntity.ok(result);
+    }
+
+    @PostMapping(value = "/upload/batch", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<BatchDiagnosisResultDTO> diagnoseBatchFromUpload(
+            @RequestPart("file") MultipartFile file) {
+        log.info("批量上传诊断请求 - 文件: {}, 大小: {}bytes",
+                file.getOriginalFilename(), file.getSize());
+        BatchDiagnosisResultDTO result = logImportService.diagnoseAllFromUpload(file);
+        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/container/{containerId}")

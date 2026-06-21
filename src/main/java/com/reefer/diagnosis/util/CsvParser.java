@@ -9,10 +9,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.PushbackInputStream;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -22,11 +24,14 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 @Component
 public class CsvParser {
 
     private static final Logger log = LoggerFactory.getLogger(CsvParser.class);
+
+    private static final int BOM_SIZE = 4096;
 
     private static final DateTimeFormatter[] DATE_FORMATTERS = new DateTimeFormatter[]{
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
@@ -38,20 +43,36 @@ public class CsvParser {
             DateTimeFormatter.ISO_LOCAL_DATE_TIME
     };
 
-    public List<TemperatureRecord> parseCsvFile(Path csvFile) throws IOException {
-        Charset charset = detectCharset(csvFile);
-        try (BufferedReader reader = Files.newBufferedReader(csvFile, charset)) {
-            return parseFromReader(reader);
+    public int parseCsvFile(Path csvFile, Consumer<TemperatureRecord> recordConsumer) throws IOException {
+        try (InputStream is = Files.newInputStream(csvFile);
+             BufferedInputStream bis = new BufferedInputStream(is)) {
+            Charset charset = detectCharset(bis);
+            return parseFromInputStreamWithCharset(bis, charset, recordConsumer);
         }
+    }
+
+    public int parseCsvStream(InputStream inputStream, Consumer<TemperatureRecord> recordConsumer) throws IOException {
+        if (!(inputStream instanceof BufferedInputStream)) {
+            inputStream = new BufferedInputStream(inputStream);
+        }
+        Charset charset = detectCharset((BufferedInputStream) inputStream);
+        return parseFromInputStreamWithCharset(inputStream, charset, recordConsumer);
+    }
+
+    public List<TemperatureRecord> parseCsvFile(Path csvFile) throws IOException {
+        List<TemperatureRecord> records = new ArrayList<>();
+        parseCsvFile(csvFile, records::add);
+        return records;
     }
 
     public List<TemperatureRecord> parseCsvStream(InputStream inputStream) throws IOException {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
-            return parseFromReader(reader);
-        }
+        List<TemperatureRecord> records = new ArrayList<>();
+        parseCsvStream(inputStream, records::add);
+        return records;
     }
 
-    private List<TemperatureRecord> parseFromReader(BufferedReader reader) throws IOException {
+    private int parseFromInputStreamWithCharset(InputStream inputStream, Charset charset,
+                                                Consumer<TemperatureRecord> recordConsumer) throws IOException {
         CSVFormat format = CSVFormat.DEFAULT.builder()
                 .setHeader()
                 .setSkipHeaderRecord(true)
@@ -60,22 +81,27 @@ public class CsvParser {
                 .setNullString("")
                 .build();
 
-        List<TemperatureRecord> records = new ArrayList<>();
-        try (CSVParser parser = new CSVParser(reader, format)) {
-            int lineNum = 1;
+        int count = 0;
+        int lineNum = 1;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, charset));
+             CSVParser parser = new CSVParser(reader, format)) {
             for (CSVRecord csvRecord : parser) {
                 lineNum++;
                 try {
                     TemperatureRecord record = mapToRecord(csvRecord);
                     if (record != null) {
-                        records.add(record);
+                        recordConsumer.accept(record);
+                        count++;
+                        if (count % 10000 == 0) {
+                            log.debug("已解析 {} 行...", count);
+                        }
                     }
                 } catch (Exception e) {
                     log.warn("解析第 {} 行失败: {}", lineNum, e.getMessage());
                 }
             }
         }
-        return records;
+        return count;
     }
 
     private TemperatureRecord mapToRecord(CSVRecord csv) {
@@ -144,21 +170,22 @@ public class CsvParser {
         throw new DiagnosisException("无法解析时间格式: " + value);
     }
 
-    private Charset detectCharset(Path file) throws IOException {
-        byte[] bytes = new byte[4096];
-        try (InputStream is = Files.newInputStream(file)) {
-            int read = is.read(bytes);
-            if (read <= 0) {
-                return StandardCharsets.UTF_8;
-            }
-        }
-        if (bytes.length >= 3 && bytes[0] == (byte) 0xEF && bytes[1] == (byte) 0xBB && bytes[2] == (byte) 0xBF) {
+    private Charset detectCharset(BufferedInputStream bis) throws IOException {
+        bis.mark(BOM_SIZE);
+        byte[] bytes = new byte[BOM_SIZE];
+        int read = bis.read(bytes);
+        bis.reset();
+
+        if (read <= 0) {
             return StandardCharsets.UTF_8;
         }
-        if (bytes.length >= 2 && bytes[0] == (byte) 0xFF && bytes[1] == (byte) 0xFE) {
+        if (read >= 3 && bytes[0] == (byte) 0xEF && bytes[1] == (byte) 0xBB && bytes[2] == (byte) 0xBF) {
+            return StandardCharsets.UTF_8;
+        }
+        if (read >= 2 && bytes[0] == (byte) 0xFF && bytes[1] == (byte) 0xFE) {
             return StandardCharsets.UTF_16LE;
         }
-        if (bytes.length >= 2 && bytes[0] == (byte) 0xFE && bytes[1] == (byte) 0xFF) {
+        if (read >= 2 && bytes[0] == (byte) 0xFE && bytes[1] == (byte) 0xFF) {
             return StandardCharsets.UTF_16BE;
         }
         return StandardCharsets.UTF_8;

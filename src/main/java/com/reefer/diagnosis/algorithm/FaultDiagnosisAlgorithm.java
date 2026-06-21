@@ -5,6 +5,7 @@ import com.reefer.diagnosis.model.DiagnosisIndicator;
 import com.reefer.diagnosis.model.DiagnosisResult;
 import com.reefer.diagnosis.model.FaultType;
 import com.reefer.diagnosis.model.Severity;
+import com.reefer.diagnosis.model.TemperatureDataSummary;
 import com.reefer.diagnosis.model.TemperatureRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -112,12 +113,125 @@ public class FaultDiagnosisAlgorithm {
                 .weight(0.05)
                 .build());
 
-        return buildDiagnosisResult(containerId, sortedRecords, indicators,
-                tempRiseRatePerHour, avgCurrent, currentStdDev, compressorRunning, maxTemp);
+        LocalDateTime dataStartTime = sortedRecords.get(0).getTimestamp();
+        LocalDateTime dataEndTime = sortedRecords.get(sortedRecords.size() - 1).getTimestamp();
+        int totalRecords = sortedRecords.size();
+
+        return buildDiagnosisResult(containerId, dataStartTime, dataEndTime, totalRecords,
+                indicators, tempRiseRatePerHour, avgCurrent, currentStdDev,
+                compressorRunning, maxTemp);
+    }
+
+    public DiagnosisResult diagnoseFromSummary(String containerId, TemperatureDataSummary summary) {
+        if (summary == null || summary.getValidTempCount() < 2) {
+            return createEmptyResult(containerId, "数据为空或不足，无法进行诊断（流式聚合模式）");
+        }
+
+        List<DiagnosisIndicator> indicators = new ArrayList<>();
+
+        double tempRiseRatePerHour = calculateTemperatureRiseRate(summary);
+        indicators.add(DiagnosisIndicator.builder()
+                .name("温度升高速率")
+                .description("每小时平均温度变化（流式近似）")
+                .value(String.format("%.3f ℃/h", tempRiseRatePerHour))
+                .threshold(properties.getTemperature().getRapidRiseRate())
+                .abnormal(tempRiseRatePerHour > properties.getTemperature().getModerateRiseRate())
+                .weight(0.35)
+                .build());
+
+        double avgCurrent = summary.getValidCurrentCount() > 0 ? summary.getAvgCurrent() : -1;
+        double currentStdDev = summary.getCurrentStdDev();
+        indicators.add(DiagnosisIndicator.builder()
+                .name("压缩机平均电流")
+                .description("所有有效采样点电流平均值（流式）")
+                .value(avgCurrent == -1 ? "无数据" : String.format("%.2f A", avgCurrent))
+                .threshold(properties.getCompressor().getNormalMaxCurrent())
+                .abnormal(avgCurrent != -1 && (avgCurrent < properties.getCompressor().getNormalMinCurrent()
+                        || avgCurrent > properties.getCompressor().getNormalMaxCurrent()))
+                .weight(0.30)
+                .build());
+
+        indicators.add(DiagnosisIndicator.builder()
+                .name("电流波动标准差")
+                .description("衡量电流稳定性（流式Welford算法）")
+                .value(String.format("%.2f", currentStdDev))
+                .threshold(properties.getCompressor().getCurrentFluctuationThreshold())
+                .abnormal(currentStdDev > properties.getCompressor().getCurrentFluctuationThreshold())
+                .weight(0.10)
+                .build());
+
+        double avgAmbient = summary.getValidAmbientCount() > 0 ? summary.getAvgAmbient() : -1;
+        indicators.add(DiagnosisIndicator.builder()
+                .name("平均环境温度")
+                .description("外部环境温度均值（流式）")
+                .value(avgAmbient == -1 ? "无数据" : String.format("%.2f ℃", avgAmbient))
+                .threshold(45.0)
+                .abnormal(avgAmbient > 45.0)
+                .weight(0.10)
+                .build());
+
+        boolean compressorRunning = summary.isCompressorEverRunning();
+        indicators.add(DiagnosisIndicator.builder()
+                .name("压缩机运行状态")
+                .description("根据电流和状态字段判断是否工作（流式）")
+                .value(compressorRunning ? "运行中" : "未运行")
+                .threshold(null)
+                .abnormal(!compressorRunning)
+                .weight(0.10)
+                .build());
+
+        double maxTemp = summary.getMaxTemperature();
+        indicators.add(DiagnosisIndicator.builder()
+                .name("最高温度")
+                .description("记录期内出现的最高箱内温度（流式）")
+                .value(Double.isNaN(maxTemp) ? "无数据" : String.format("%.2f ℃", maxTemp))
+                .threshold(properties.getTemperature().getDangerTemp())
+                .abnormal(!Double.isNaN(maxTemp) && maxTemp > properties.getTemperature().getDangerTemp())
+                .weight(0.05)
+                .build());
+
+        return buildDiagnosisResult(containerId,
+                summary.getStartTime(), summary.getEndTime(), summary.getTotalRecords(),
+                indicators, tempRiseRatePerHour, avgCurrent, currentStdDev,
+                compressorRunning, maxTemp);
+    }
+
+    private double calculateTemperatureRiseRate(TemperatureDataSummary summary) {
+        if (summary.getValidTempCount() < 2 || Double.isNaN(summary.getStartTemperature())
+                || Double.isNaN(summary.getEndTemperature())
+                || summary.getStartTime() == null || summary.getEndTime() == null) {
+            return 0.0;
+        }
+
+        long totalMinutes = Duration.between(summary.getStartTime(), summary.getEndTime()).toMinutes();
+        if (totalMinutes <= 0) {
+            return 0.0;
+        }
+
+        double overallRate = (summary.getEndTemperature() - summary.getStartTemperature())
+                / (totalMinutes / 60.0);
+
+        if (summary.getRecentWindowSize() >= 2
+                && !Double.isNaN(summary.getRecentStartTemperature())
+                && !Double.isNaN(summary.getRecentEndTemperature())
+                && summary.getRecentStartTime() != null
+                && summary.getRecentEndTime() != null) {
+            long recentMinutes = Duration.between(
+                    summary.getRecentStartTime(), summary.getRecentEndTime()).toMinutes();
+            if (recentMinutes > 0) {
+                double recentRate = (summary.getRecentEndTemperature() - summary.getRecentStartTemperature())
+                        / (recentMinutes / 60.0);
+                return recentRate * 0.6 + overallRate * 0.4;
+            }
+        }
+
+        return overallRate;
     }
 
     private DiagnosisResult buildDiagnosisResult(String containerId,
-                                                 List<TemperatureRecord> records,
+                                                 LocalDateTime dataStartTime,
+                                                 LocalDateTime dataEndTime,
+                                                 int totalRecords,
                                                  List<DiagnosisIndicator> indicators,
                                                  double tempRiseRate,
                                                  double avgCurrent,
@@ -219,9 +333,9 @@ public class FaultDiagnosisAlgorithm {
                 .severity(severity)
                 .confidence(confidence)
                 .analysisTime(LocalDateTime.now())
-                .dataStartTime(records.get(0).getTimestamp())
-                .dataEndTime(records.get(records.size() - 1).getTimestamp())
-                .totalRecords(records.size())
+                .dataStartTime(dataStartTime)
+                .dataEndTime(dataEndTime)
+                .totalRecords(totalRecords)
                 .indicators(indicators)
                 .diagnosisSummary(summary.toString())
                 .suggestion(suggestion.toString())
