@@ -1,0 +1,38 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: reefer-diagnosis
+  servlet:
+    multipart:
+      max-file-size: 500MB
+      max-request-size: 1GB
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    serialization:
+      write-dates-as-timestamps: false
+
+logging:
+  level:
+    com.reefer.diagnosis: DEBUG
+    root: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+diagnosis:
+  temperature:
+    rapid-rise-rate: 2.0
+    moderate-rise-rate: 0.8
+    max-normal-temp: -15.0
+    danger-temp: -5.0
+    trend-window-minutes: 30
+  compressor:
+    normal-min-current: 8.0
+    normal-max-current: 18.0
+    motor-burn-low-current: 2.0
+    motor-burn-high-current: 25.0
+    current-fluctuation-threshold: 5.0
